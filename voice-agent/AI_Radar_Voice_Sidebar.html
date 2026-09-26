@@ -1,134 +1,65 @@
 <!DOCTYPE html>
+<!-- AI RADAR — SIDEBAR (bridge) — v2
+     The sidebar can no longer use the mic directly: Chrome blocks microphone
+     access inside Apps Script sidebars (sandboxed cross-origin iframe).
+     Instead, this sidebar:
+       1. opens the voice POPUP (a top-level window, where the mic works),
+       2. relays the popup's questions to the server (google.script.run),
+       3. relays the answers back, and
+       4. still offers typed questions, which work right here.
+     Keep this sidebar open while using the popup. -->
 <html>
 <head>
   <base target="_top">
   <style>
     body { font-family: 'Google Sans', Arial, sans-serif; margin: 0; padding: 14px; color: #202124; font-size: 14px; }
-    #status { color: #5f6368; font-size: 12px; min-height: 18px; margin-bottom: 8px; }
-    .mic { width: 64px; height: 64px; border-radius: 50%; border: none; background: #1a73e8;
-           color: white; font-size: 26px; cursor: pointer; margin: 8px auto 4px; display: block; }
-    .mic.listening { background: #d93025; animation: pulse 1.2s infinite; }
-    @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(217,48,37,.4); }
-                       50% { box-shadow: 0 0 0 12px rgba(217,48,37,0); } }
-    #transcript { background: #f1f3f4; border-radius: 8px; padding: 8px 10px; margin: 10px 0; min-height: 20px; }
+    #status { color: #5f6368; font-size: 12px; min-height: 18px; margin-bottom: 10px; }
+    .bigbtn { width: 100%; padding: 12px; background: #1a73e8; color: #fff; border: none;
+              border-radius: 8px; margin: 6px 0 4px; cursor: pointer; font-size: 14px; }
+    .bigbtn:hover { background: #1765cc; }
+    .why { font-size: 11px; color: #80868b; text-align: center; margin: 2px 0 14px; }
     #answer { background: #e8f0fe; border-radius: 8px; padding: 8px 10px; margin: 10px 0; display: none; }
-    select, input[type=text] { width: 100%; padding: 6px 8px; margin: 4px 0 10px; box-sizing: border-box;
-                               border: 1px solid #dadce0; border-radius: 4px; font-size: 13px; }
-    .hint { font-size: 11px; color: #80868b; text-align: center; }
+    input[type=text] { width: 100%; padding: 6px 8px; margin: 4px 0 6px; box-sizing: border-box;
+                       border: 1px solid #dadce0; border-radius: 4px; font-size: 13px; }
     label { font-size: 12px; color: #5f6368; }
-    #askTyped { width: 100%; padding: 8px; background: #1a73e8; color: #fff; border: none;
-                border-radius: 4px; margin-top: 6px; cursor: pointer; font-size: 13px; }
+    #askTyped { width: 100%; padding: 8px; background: #188038; color: #fff; border: none;
+                border-radius: 4px; cursor: pointer; font-size: 13px; }
+    hr { border: none; border-top: 1px solid #eee; margin: 14px 0; }
   </style>
 </head>
 <body>
-  <div id="status">Tap the mic and ask anything about today&rsquo;s AI Radar.</div>
-  <button id="mic" class="mic" title="Start / stop listening">🎤</button>
-  <div class="hint">answers come from today&rsquo;s news + your upgrade tracker</div>
+  <div id="status">Ready. Tap below to talk — voice runs in a small popup window.</div>
+  <button id="openVoice" class="bigbtn">🎙 Start voice conversation</button>
+  <div class="why">Chrome blocks the mic inside sidebars, so listening happens in a popup.
+    Keep this sidebar open while the popup is in use.</div>
 
-  <label for="lang">Voice language</label>
-  <select id="lang">
-    <option value="en-IN" selected>English (India)</option>
-    <option value="en-US">English (US)</option>
-    <option value="hi-IN">हिन्दी</option>
-  </select>
-
-  <div id="transcript">&mdash;</div>
   <div id="answer"></div>
 
-  <label>Or type your question</label>
+  <hr>
+  <label>Or type your question (works right here)</label>
   <input type="text" id="typed" placeholder="e.g. any urgent fixes today?">
   <button id="askTyped">Ask</button>
-  <p class="hint">Best in Chrome desktop. The agent re-listens after every answer &mdash; tap the mic again to stop.</p>
 
 <script>
-  var listening = false;
-  var recog = null;
-  var finalTranscript = '';
+  var voiceWin = null;
 
   function setStatus(s) { document.getElementById('status').textContent = s; }
 
-  function speak(text) {
-    try {
-      var u = new SpeechSynthesisUtterance(text);
-      u.lang = document.getElementById('lang').value;
-      speechSynthesis.cancel();
-      speechSynthesis.speak(u);
-      u.onend = function () { if (listening) setTimeout(startRecog, 400); };
-    } catch (e) { /* TTS unavailable in this browser */ }
-  }
-
+  // ---- typed questions: straight to the server ----
   function askServer(question) {
     if (!question) return;
-    document.getElementById('transcript').textContent = question;
     setStatus('Thinking\u2026');
     google.script.run
       .withSuccessHandler(function (answer) {
-        document.getElementById('answer').style.display = 'block';
-        document.getElementById('answer').textContent = answer;
-        setStatus('Answering\u2026');
-        speak(answer);
+        var a = document.getElementById('answer');
+        a.style.display = 'block';
+        a.textContent = answer;
+        setStatus('Answer shown below.');
+        try { speechSynthesis.speak(new SpeechSynthesisUtterance(answer)); } catch (e) {}
       })
-      .withFailureHandler(function (err) {
-        setStatus('Error: ' + err.message);
-      })
+      .withFailureHandler(function (err) { setStatus('Error: ' + err.message); })
       .ask(question);
   }
-
-  function startRecog() {
-    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      setStatus('Voice input is not supported in this browser \u2014 use the text box below (Chrome desktop is best).');
-      listening = false;
-      updateMic();
-      return;
-    }
-    recog = new SR();
-    recog.lang = document.getElementById('lang').value;
-    recog.interimResults = true;
-    recog.continuous = false;
-    finalTranscript = '';
-
-    recog.onresult = function (e) {
-      var interim = '';
-      for (var i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) finalTranscript += e.results[i][0].transcript;
-        else interim += e.results[i][0].transcript;
-      }
-      document.getElementById('transcript').textContent = finalTranscript || interim || '\u2014';
-    };
-    recog.onerror = function (e) {
-      var extra = e.error === 'not-allowed' ? ' \u2014 allow microphone access in Chrome.' : '';
-      setStatus('Mic error: ' + e.error + extra);
-      listening = false;
-      updateMic();
-    };
-    recog.onend = function () {
-      if (finalTranscript.trim()) {
-        askServer(finalTranscript.trim());
-      } else if (listening) {
-        setTimeout(startRecog, 300); // silence \u2014 keep listening
-      }
-    };
-    try { recog.start(); setStatus('Listening\u2026'); } catch (e) {}
-  }
-
-  function updateMic() {
-    var m = document.getElementById('mic');
-    m.classList.toggle('listening', listening);
-    m.innerHTML = listening ? '⏹' : '🎤';
-  }
-
-  document.getElementById('mic').onclick = function () {
-    listening = !listening;
-    updateMic();
-    if (listening) {
-      startRecog();
-    } else {
-      if (recog) { try { recog.stop(); } catch (e) {} }
-      try { speechSynthesis.cancel(); } catch (e) {}
-      setStatus('Stopped.');
-    }
-  };
 
   document.getElementById('askTyped').onclick = function () {
     var q = document.getElementById('typed').value.trim();
@@ -138,6 +69,49 @@
   document.getElementById('typed').addEventListener('keydown', function (e) {
     if (e.key === 'Enter') document.getElementById('askTyped').click();
   });
+
+  // ---- popup bridge ----
+  function openVoicePopup() {
+    setStatus('Opening voice window\u2026');
+    google.script.run
+      .withSuccessHandler(function (html) {
+        voiceWin = window.open('', '_blank');
+        if (!voiceWin) {
+          setStatus('Popup blocked \u2014 allow popups for this page (icon in the address bar), then tap again.');
+          return;
+        }
+        voiceWin.document.open();
+        voiceWin.document.write(html);
+        voiceWin.document.close();
+        setStatus('Voice window open \u2014 speak there. Keep this sidebar open.');
+      })
+      .withFailureHandler(function (err) { setStatus('Error: ' + err.message); })
+      .getPopupHtml();
+  }
+  document.getElementById('openVoice').onclick = openVoicePopup;
+
+  window.addEventListener('message', function (ev) {
+    var d = ev.data;
+    if (!d || !d.type) return;
+    if (d.type === 'ask' && d.question) {
+      setStatus('Thinking\u2026');
+      google.script.run
+        .withSuccessHandler(function (answer) {
+          postToVoice({ type: 'answer', text: answer });
+          setStatus('Answered \u2014 see the voice window.');
+        })
+        .withFailureHandler(function (err) {
+          postToVoice({ type: 'error', text: err.message });
+          setStatus('Error: ' + err.message);
+        })
+        .ask(d.question);
+    }
+    if (d.type === 'popupClosed') voiceWin = null;
+  });
+
+  function postToVoice(msg) {
+    try { if (voiceWin && !voiceWin.closed) voiceWin.postMessage(msg, '*'); } catch (e) {}
+  }
 </script>
 </body>
 </html>

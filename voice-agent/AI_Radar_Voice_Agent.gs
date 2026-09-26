@@ -1,24 +1,28 @@
 /**
- * AI RADAR — VOICE AGENT (Google Apps Script, container-bound)
- * ------------------------------------------------------------
- * Gives you a "🎙 AI Radar Voice" menu inside this Google Doc.
- * The sidebar listens to your question with your microphone,
- * answers it using TODAY'S content of both AI Radar docs
- * (Daily News Log + Project Model Upgrade Tracker), and speaks
- * the answer back. After every answer it re-listens automatically.
+ * AI RADAR — VOICE AGENT (Google Apps Script, container-bound) — v3
+ * ----------------------------------------------------------------
+ * WHY v3: Chrome blocks microphone access inside Apps Script sidebars,
+ * because the sidebar HTML runs in a sandboxed cross-origin iframe
+ * (*.googleusercontent.com). No amount of "allow microphone" fixes that.
+ * THE FIX: voice now runs in a separate popup window (top-level page,
+ * full mic access). The sidebar stays open as the bridge that calls
+ * the Gemini server code.
+ *
+ * FILES NEEDED (all in this Apps Script project):
+ *   - Code.gs            <- this file
+ *   - Sidebar.html       <- bridge UI (typed questions + opens the popup)
+ *   - Popup.html         <- the voice window (mic + spoken answers)
  *
  * SETUP (2 minutes):
  *   1. In the doc: Extensions → Apps Script.
- *   2. Delete everything in the default Code.gs and paste this file in.
- *   3. Click + next to "Files" → HTML → name it exactly: Sidebar
- *      then paste the contents of AI_Radar_Voice_Sidebar.html in it.
+ *   2. Replace Code.gs with this file.
+ *   3. Make sure the HTML files Sidebar and Popup exist (see file list above).
  *   4. Save (Ctrl+S), then reload the Google Doc tab.
  *   5. First use: menu 🎙 AI Radar Voice → "Set Gemini API key…"
- *      (free key from aistudio.google.com/apikey — stored securely in
- *      your Google account's script properties, never inside the doc).
+ *      (free key from aistudio.google.com/apikey — stored securely in your
+ *      Google account's script properties, never inside the doc).
  *
- * Requires Chrome desktop for voice input/output. A text box is
- * included as fallback. See AI_Radar_Voice_Setup.md for details.
+ * Requires Chrome desktop. See AI_Radar_Voice_Setup.md for details.
  */
 
 var NEWS_DOC_ID = '1E_cJ53dGq1a1AQ4YEBhLzbDtcGFwZwTwVHYfzxCyguA';
@@ -56,6 +60,15 @@ function promptApiKey() {
 }
 
 /**
+ * Returns the HTML of the popup voice window. Called by the sidebar,
+ * which then writes it into a new top-level window (this is what makes
+ * the microphone work — the popup is NOT inside Google's sandboxed iframe).
+ */
+function getPopupHtml() {
+  return HtmlService.createHtmlOutputFromFile('Popup').getContent();
+}
+
+/**
  * Builds the context the agent answers from:
  * today's (newest) dated section of the news log + the full tracker.
  */
@@ -80,8 +93,8 @@ function getDocsContext() {
 }
 
 /**
- * Called from the sidebar with the user's (spoken or typed) question.
- * Returns a concise, speakable answer grounded in today's docs.
+ * Called from the sidebar (typed questions) or the popup (spoken questions,
+ * relayed through the sidebar). Returns a concise, speakable answer.
  */
 function ask(question) {
   var key = PropertiesService.getUserProperties().getProperty('GEMINI_API_KEY');

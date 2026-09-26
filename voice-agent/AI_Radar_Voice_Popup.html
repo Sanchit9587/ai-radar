@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<!-- AI RADAR — VOICE POPUP — v1
+     This page is written into a top-level window by the AI Radar sidebar.
+     Being a top-level page (NOT inside Google's sandboxed iframe) is exactly
+     why the microphone works here. It talks to the sidebar via postMessage;
+     the sidebar relays questions to the Gemini server code. -->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AI Radar Voice</title>
+  <style>
+    body { font-family: 'Google Sans', Arial, sans-serif; background: #f8f9fa; color: #202124;
+           display: flex; justify-content: center; margin: 0; padding: 16px; }
+    .card { width: 340px; max-width: 95vw; }
+    h1 { font-size: 17px; color: #1a73e8; margin: 4px 0 2px; }
+    .sub { font-size: 11px; color: #80868b; margin-bottom: 12px; }
+    #status { color: #5f6368; font-size: 12px; min-height: 18px; margin-bottom: 8px; }
+    .mic { width: 72px; height: 72px; border-radius: 50%; border: none; background: #1a73e8;
+           color: white; font-size: 30px; cursor: pointer; margin: 8px auto 6px; display: block; }
+    .mic.listening { background: #d93025; animation: pulse 1.2s infinite; }
+    @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(217,48,37,.4); }
+                       50% { box-shadow: 0 0 0 14px rgba(217,48,37,0); } }
+    .hint { font-size: 11px; color: #80868b; text-align: center; margin-bottom: 12px; }
+    #transcript { background: #f1f3f4; border-radius: 8px; padding: 8px 10px; margin: 8px 0; min-height: 20px; font-size: 13px; }
+    #answer { background: #e8f0fe; border-radius: 8px; padding: 8px 10px; margin: 8px 0; display: none; font-size: 13px; line-height: 1.45; }
+    label { font-size: 12px; color: #5f6368; }
+    select, input[type=text] { width: 100%; padding: 6px 8px; margin: 4px 0 8px; box-sizing: border-box;
+                               border: 1px solid #dadce0; border-radius: 4px; font-size: 13px; }
+    #askTyped { width: 100%; padding: 8px; background: #188038; color: #fff; border: none;
+                border-radius: 4px; margin-top: 2px; cursor: pointer; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🎙 AI Radar Voice</h1>
+    <div class="sub">answers come from today&rsquo;s news + your upgrade tracker · keep the sidebar open in the doc</div>
+
+    <div id="status"></div>
+    <button id="mic" class="mic" title="Start / stop listening">🎤</button>
+    <div class="hint">tap to talk · it re-listens after every answer</div>
+
+    <label for="lang">Voice language</label>
+    <select id="lang">
+      <option value="en-IN" selected>English (India)</option>
+      <option value="en-US">English (US)</option>
+      <option value="hi-IN">हिन्दी</option>
+    </select>
+
+    <div id="transcript">&mdash;</div>
+    <div id="answer"></div>
+
+    <label>Or type your question</label>
+    <input type="text" id="typed" placeholder="e.g. any urgent fixes today?">
+    <button id="askTyped">Ask</button>
+  </div>
+
+<script>
+  var listening = false;
+  var recog = null;
+  var finalTranscript = '';
+
+  function setStatus(s) { document.getElementById('status').textContent = s; }
+
+  if (!window.opener || window.opener.closed) {
+    setStatus('The AI Radar sidebar was closed. Close this window, reopen the sidebar from the doc menu, and try again.');
+  } else {
+    setStatus('Ready \u2014 tap the mic and ask anything about today\u2019s AI Radar.');
+  }
+
+  // ---- bridge to the sidebar (which calls the Gemini server code) ----
+  function askServer(question) {
+    if (!question) return;
+    if (!window.opener || window.opener.closed) {
+      setStatus('The AI Radar sidebar was closed \u2014 please reopen it from the doc menu first.');
+      return;
+    }
+    document.getElementById('transcript').textContent = question;
+    setStatus('Thinking\u2026');
+    window.opener.postMessage({ type: 'ask', question: question }, '*');
+  }
+
+  window.addEventListener('message', function (ev) {
+    var d = ev.data;
+    if (!d || !d.type) return;
+    if (d.type === 'answer') {
+      var a = document.getElementById('answer');
+      a.style.display = 'block';
+      a.textContent = d.text;
+      setStatus('Answering\u2026');
+      speak(d.text);
+    }
+    if (d.type === 'error') {
+      setStatus('Error from server: ' + d.text);
+      listening = false;
+      updateMic();
+    }
+  });
+
+  window.addEventListener('beforeunload', function () {
+    try { window.opener.postMessage({ type: 'popupClosed' }, '*'); } catch (e) {}
+  });
+
+  // ---- speech output ----
+  function speak(text) {
+    try {
+      var u = new SpeechSynthesisUtterance(text);
+      u.lang = document.getElementById('lang').value;
+      speechSynthesis.cancel();
+      speechSynthesis.speak(u);
+      u.onend = function () { if (listening) setTimeout(startRecog, 400); };
+    } catch (e) { /* TTS unavailable */ }
+  }
+
+  // ---- speech input (works here because this is a top-level page) ----
+  function startRecog() {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      setStatus('Voice input is not supported in this browser \u2014 use the text box below (Chrome desktop is best).');
+      listening = false;
+      updateMic();
+      return;
+    }
+    recog = new SR();
+    recog.lang = document.getElementById('lang').value;
+    recog.interimResults = true;
+    recog.continuous = false;
+    finalTranscript = '';
+
+    recog.onresult = function (e) {
+      var interim = '';
+      for (var i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) finalTranscript += e.results[i][0].transcript;
+        else interim += e.results[i][0].transcript;
+      }
+      document.getElementById('transcript').textContent = finalTranscript || interim || '\u2014';
+    };
+    recog.onerror = function (e) {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        setStatus('Microphone blocked for this window. Click the mic/tune icon at the left of the address bar, set Microphone to Allow, then tap the mic again.');
+      } else {
+        setStatus('Mic error: ' + e.error);
+      }
+      listening = false;
+      updateMic();
+    };
+    recog.onend = function () {
+      if (finalTranscript.trim()) {
+        askServer(finalTranscript.trim());
+      } else if (listening) {
+        setTimeout(startRecog, 300); // silence — keep listening
+      }
+    };
+    try { recog.start(); setStatus('Listening\u2026'); } catch (e) {}
+  }
+
+  function updateMic() {
+    var m = document.getElementById('mic');
+    m.classList.toggle('listening', listening);
+    m.innerHTML = listening ? '⏹' : '🎤';
+  }
+
+  document.getElementById('mic').onclick = function () {
+    listening = !listening;
+    updateMic();
+    if (listening) {
+      startRecog();
+    } else {
+      if (recog) { try { recog.stop(); } catch (e) {} }
+      try { speechSynthesis.cancel(); } catch (e) {}
+      setStatus('Stopped. Tap the mic to talk again.');
+    }
+  };
+
+  document.getElementById('askTyped').onclick = function () {
+    var q = document.getElementById('typed').value.trim();
+    if (q) askServer(q);
+    document.getElementById('typed').value = '';
+  };
+  document.getElementById('typed').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') document.getElementById('askTyped').click();
+  });
+</script>
+</body>
+</html>
